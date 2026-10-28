@@ -1,0 +1,36 @@
+{
+    "name": "super-kernel/http-message",
+    "description": "PSR-7 messages and scoped HTTP message access for SuperKernel.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.4.27 <8.5",
+        "psr/http-message": "^2.0",
+        "super-kernel/attribute": "dev-main",
+        "super-kernel/context": "dev-main"
+    },
+    "provide": {
+        "psr/http-message-implementation": "2.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95.27",
+        "phpunit/phpunit": "^13.4.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "SuperKernel\\HttpMessage\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SuperKernel\\HttpMessage\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "format": "@php vendor/bin/php-cs-fixer fix --show-progress=bar --no-ansi",
+        "format:check": "@php vendor/bin/php-cs-fixer check --show-progress=bar --no-ansi --diff",
+        "test": "@php vendor/bin/phpunit"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
