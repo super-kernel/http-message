@@ -19,7 +19,7 @@ Paths below are relative to `src/` and the package namespace.
 
 | Directory            | Responsibility                                                                                |
 |----------------------|-----------------------------------------------------------------------------------------------|
-| `Header`             | `@internal` header field validation, case-insensitive lookup, and Host header derivation.     |
+| `Header`             | `@internal` header validation, case-insensitive lookup and replacement, and Host derivation.  |
 | `StartLine`          | `@internal` protocol version, request method, and response status validation.                 |
 | `UriComponent`       | `@internal` URI component normalization, percent-encoding, authority, and standard ports.     |
 | `Upload`             | `@internal` uploaded-file tree validation, availability, size, copying, and moving.           |
@@ -29,12 +29,6 @@ Paths below are relative to `src/` and the package namespace.
 | `Context / Provider` | Typed request-local access, its `@internal` call forwarders, and stateless PSR delegates.     |
 
 Implementation helpers retain an `@internal` boundary; a responsibility namespace does not make them extension points.
-
-### Public namespaces
-
-Use the following component declarations:
-
-- `Stream\ResourceStreamBehavior`
 
 ## Basic usage
 

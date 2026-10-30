@@ -9,6 +9,7 @@ use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\StreamInterface;
 use SuperKernel\HttpMessage\Header\HeaderField;
 use SuperKernel\HttpMessage\Header\HeaderLookup;
+use SuperKernel\HttpMessage\Header\HeaderMap;
 use SuperKernel\HttpMessage\StartLine\ProtocolVersion;
 use SuperKernel\HttpMessage\Stream\StringStream;
 
@@ -47,15 +48,7 @@ abstract class Message implements MessageInterface
                 throw new InvalidArgumentException('HTTP header names must be strings.');
             }
 
-            $normalizedName = HeaderField::normalizeName($name);
-            $originalName = $this->headerNames[$normalizedName] ?? null;
-
-            if (null !== $originalName) {
-                unset($this->headers[$originalName]);
-            }
-
-            $this->headers[$name] = HeaderField::normalizeValues($value, $name);
-            $this->headerNames[$normalizedName] = $name;
+            HeaderMap::replace($this->headers, $this->headerNames, $name, $value);
         }
     }
 
@@ -101,15 +94,7 @@ abstract class Message implements MessageInterface
     final public function withHeader(string $name, mixed $value): static
     {
         $clone = clone $this;
-        $normalizedName = HeaderField::normalizeName($name);
-        $originalName = $clone->headerNames[$normalizedName] ?? null;
-
-        if (null !== $originalName) {
-            unset($clone->headers[$originalName]);
-        }
-
-        $clone->headers[$name] = HeaderField::normalizeValues($value, $name);
-        $clone->headerNames[$normalizedName] = $name;
+        HeaderMap::replace($clone->headers, $clone->headerNames, $name, $value);
 
         return $clone;
     }
@@ -169,14 +154,6 @@ abstract class Message implements MessageInterface
      */
     final protected function replaceHeader(string $name, mixed $value): void
     {
-        $normalizedName = HeaderField::normalizeName($name);
-        $originalName = $this->headerNames[$normalizedName] ?? null;
-
-        if (null !== $originalName) {
-            unset($this->headers[$originalName]);
-        }
-
-        $this->headers[$name] = HeaderField::normalizeValues($value, $name);
-        $this->headerNames[$normalizedName] = $name;
+        HeaderMap::replace($this->headers, $this->headerNames, $name, $value);
     }
 }
