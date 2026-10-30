@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use ReflectionClass;
+use ReflectionException;
 use stdClass;
 use SuperKernel\Attribute\Provider;
 use SuperKernel\HttpMessage\Context\RequestContext;
@@ -20,6 +21,7 @@ use SuperKernel\HttpMessage\ServerRequest;
 use Throwable;
 
 use function is_callable;
+use function sort;
 
 final class MessageProviderTest extends TestCase
 {
@@ -53,8 +55,7 @@ final class MessageProviderTest extends TestCase
 
         self::assertProvider(RequestProvider::class, ServerRequestInterface::class);
         self::assertInstanceOf(ServerRequestInterface::class, $request);
-        self::assertTrue($reflection->getMethod('delegate')->isPrivate());
-        self::assertTrue($reflection->getMethod('request')->isPrivate());
+        self::assertSame(self::methodNames(ServerRequestInterface::class), self::methodNames(RequestProvider::class));
         self::assertFalse($reflection->hasMethod('__call'));
         self::assertFalse($reflection->hasMethod('serverRequest'));
         self::assertFalse($reflection->hasMethod('nativeRequest'));
@@ -83,8 +84,7 @@ final class MessageProviderTest extends TestCase
 
         self::assertProvider(ResponseProvider::class, ResponseInterface::class);
         self::assertInstanceOf(ResponseInterface::class, $response);
-        self::assertTrue($reflection->getMethod('delegate')->isPrivate());
-        self::assertTrue($reflection->getMethod('response')->isPrivate());
+        self::assertSame(self::methodNames(ResponseInterface::class), self::methodNames(ResponseProvider::class));
         self::assertFalse($reflection->hasMethod('__call'));
         self::assertFalse($reflection->hasMethod('nativeResponse'));
         self::assertSame(200, $response->getStatusCode());
@@ -163,5 +163,27 @@ final class MessageProviderTest extends TestCase
 
         self::assertCount(1, $attributes);
         self::assertSame($contract, $attributes[0]->newInstance()->className);
+    }
+
+    /**
+     * Lists every method a class or interface declares or inherits, so a provider can be compared with its contract.
+     *
+     * @param class-string $class
+     *
+     * @return list<string>
+     *
+     * @throws ReflectionException When the class or interface does not exist
+     */
+    private static function methodNames(string $class): array
+    {
+        $names = [];
+
+        foreach (new ReflectionClass($class)->getMethods() as $method) {
+            $names[] = $method->getName();
+        }
+
+        sort($names);
+
+        return $names;
     }
 }

@@ -7,16 +7,14 @@ namespace SuperKernel\HttpMessage;
 use InvalidArgumentException;
 use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\StreamInterface;
+use SuperKernel\HttpMessage\Header\HeaderField;
+use SuperKernel\HttpMessage\Header\HeaderLookup;
+use SuperKernel\HttpMessage\StartLine\ProtocolVersion;
 use SuperKernel\HttpMessage\Stream\StringStream;
 
-use function array_values;
 use function implode;
-use function is_array;
 use function is_string;
-use function preg_match;
-use function sprintf;
 use function strtolower;
-use function trim;
 
 abstract class Message implements MessageInterface
 {
@@ -41,7 +39,7 @@ abstract class Message implements MessageInterface
         string                      $protocolVersion = '1.1',
     )
     {
-        $this->protocolVersion = self::normalizeProtocolVersion($protocolVersion);
+        $this->protocolVersion = ProtocolVersion::normalize($protocolVersion);
         $this->body = $body instanceof StreamInterface ? $body : new StringStream($body ?? '');
 
         foreach ($headers as $name => $value) {
@@ -49,7 +47,15 @@ abstract class Message implements MessageInterface
                 throw new InvalidArgumentException('HTTP header names must be strings.');
             }
 
-            $this->replaceHeader($name, $value);
+            $normalizedName = HeaderField::normalizeName($name);
+            $originalName = $this->headerNames[$normalizedName] ?? null;
+
+            if (null !== $originalName) {
+                unset($this->headers[$originalName]);
+            }
+
+            $this->headers[$name] = HeaderField::normalizeValues($value, $name);
+            $this->headerNames[$normalizedName] = $name;
         }
     }
 
@@ -61,7 +67,7 @@ abstract class Message implements MessageInterface
     final public function withProtocolVersion(string $version): static
     {
         $clone = clone $this;
-        $clone->protocolVersion = self::normalizeProtocolVersion($version);
+        $clone->protocolVersion = ProtocolVersion::normalize($version);
 
         return $clone;
     }
@@ -84,28 +90,34 @@ abstract class Message implements MessageInterface
      */
     final public function getHeader(string $name): array
     {
-        $originalName = $this->headerNames[strtolower($name)] ?? null;
-
-        return null === $originalName ? [] : $this->headers[$originalName];
+        return HeaderLookup::values($this->headers, $this->headerNames, $name);
     }
 
     final public function getHeaderLine(string $name): string
     {
-        return implode(', ', $this->getHeader($name));
+        return implode(', ', HeaderLookup::values($this->headers, $this->headerNames, $name));
     }
 
     final public function withHeader(string $name, mixed $value): static
     {
         $clone = clone $this;
-        $clone->replaceHeader($name, $value);
+        $normalizedName = HeaderField::normalizeName($name);
+        $originalName = $clone->headerNames[$normalizedName] ?? null;
+
+        if (null !== $originalName) {
+            unset($clone->headers[$originalName]);
+        }
+
+        $clone->headers[$name] = HeaderField::normalizeValues($value, $name);
+        $clone->headerNames[$normalizedName] = $name;
 
         return $clone;
     }
 
     final public function withAddedHeader(string $name, mixed $value): static
     {
-        $normalizedName = self::normalizeHeaderName($name);
-        $values = self::normalizeHeaderValues($value, $name);
+        $normalizedName = HeaderField::normalizeName($name);
+        $values = HeaderField::normalizeValues($value, $name);
         $clone = clone $this;
         $originalName = $clone->headerNames[$normalizedName] ?? null;
 
@@ -152,67 +164,19 @@ abstract class Message implements MessageInterface
         return $clone;
     }
 
+    /**
+     * @throws InvalidArgumentException When the header name or a header value is invalid
+     */
     final protected function replaceHeader(string $name, mixed $value): void
     {
-        $normalizedName = self::normalizeHeaderName($name);
+        $normalizedName = HeaderField::normalizeName($name);
         $originalName = $this->headerNames[$normalizedName] ?? null;
 
         if (null !== $originalName) {
             unset($this->headers[$originalName]);
         }
 
-        $this->headers[$name] = self::normalizeHeaderValues($value, $name);
+        $this->headers[$name] = HeaderField::normalizeValues($value, $name);
         $this->headerNames[$normalizedName] = $name;
-    }
-
-    private static function normalizeProtocolVersion(string $version): string
-    {
-        if (1 !== preg_match('/^[0-9]+(?:\.[0-9]+)*$/D', $version)) {
-            throw new InvalidArgumentException(sprintf(
-                'Invalid HTTP protocol version %s.',
-                $version,
-            ));
-        }
-
-        return $version;
-    }
-
-    private static function normalizeHeaderName(string $name): string
-    {
-        if (1 !== preg_match("/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/D", $name)) {
-            throw new InvalidArgumentException(sprintf('Invalid HTTP header name %s.', $name));
-        }
-
-        return strtolower($name);
-    }
-
-    /**
-     * @return list<string>
-     */
-    private static function normalizeHeaderValues(mixed $value, string $name): array
-    {
-        $values = is_array($value) ? array_values($value) : [
-            $value,
-        ];
-
-        foreach ($values as $index => $item) {
-            if (!is_string($item)) {
-                throw new InvalidArgumentException(sprintf(
-                    'HTTP header %s values must be strings.',
-                    $name,
-                ));
-            }
-
-            if (1 === preg_match('/[\x00-\x08\x0A-\x1F\x7F]/', $item)) {
-                throw new InvalidArgumentException(sprintf(
-                    'HTTP header %s contains a prohibited control character.',
-                    $name,
-                ));
-            }
-
-            $values[$index] = trim($item, " \t");
-        }
-
-        return $values;
     }
 }

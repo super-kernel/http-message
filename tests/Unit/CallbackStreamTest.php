@@ -43,6 +43,11 @@ final class CallbackStreamTest extends TestCase
         ], $requests);
     }
 
+    /**
+     * The reader keeps the documented callback signature that receives the requested length.
+     *
+     * @noinspection PhpUnusedParameterInspection
+     */
     public function testReadReturnsTheProducedChunkWithoutRequestingTheNextOne(): void
     {
         $calls = 0;

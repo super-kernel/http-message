@@ -6,10 +6,12 @@ namespace SuperKernel\HttpMessage\Stream;
 
 use Psr\Http\Message\StreamInterface;
 use RuntimeException;
+use SuperKernel\HttpMessage\Stream\Resource\ResourceCapabilities;
 use Throwable;
 
 use function fopen;
 use function sprintf;
+use function stream_get_meta_data;
 
 final class FileStream implements StreamInterface
 {
@@ -33,6 +35,10 @@ final class FileStream implements StreamInterface
             throw new RuntimeException(sprintf('Unable to open HTTP message stream file %s.', $filename));
         }
 
-        $this->initializeResource($resource);
+        $metadata = stream_get_meta_data($resource);
+        $this->resource = $resource;
+        $this->seekable = ResourceCapabilities::isSeekable($metadata);
+        $this->readable = ResourceCapabilities::isReadable($metadata);
+        $this->writable = ResourceCapabilities::isWritable($metadata);
     }
 }

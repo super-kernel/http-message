@@ -4,31 +4,24 @@ declare(strict_types=1);
 
 namespace SuperKernel\HttpMessage\Stream;
 
-use InvalidArgumentException;
 use RuntimeException;
+use SuperKernel\HttpMessage\Stream\Resource\ResourceContents;
+use SuperKernel\HttpMessage\Stream\Resource\ResourceCursor;
+use SuperKernel\HttpMessage\Stream\Resource\ResourceGuard;
 use Throwable;
 
 use function fclose;
 use function feof;
 use function fread;
-use function fseek;
 use function fstat;
 use function ftell;
 use function fwrite;
-use function get_resource_type;
-use function in_array;
 use function is_array;
 use function is_int;
 use function is_resource;
-use function is_string;
-use function sprintf;
-use function str_contains;
-use function stream_get_contents;
 use function stream_get_meta_data;
 use function substr;
 
-use const SEEK_CUR;
-use const SEEK_END;
 use const SEEK_SET;
 
 /**
@@ -49,33 +42,9 @@ trait ResourceStreamBehavior
 
     private bool $writable;
 
-    /**
-     * @param resource $resource
-     */
-    final protected function initializeResource(mixed $resource): void
-    {
-        if (!is_resource($resource) || 'stream' !== get_resource_type($resource)) {
-            throw new InvalidArgumentException('A native stream resource is required.');
-        }
-
-        $metadata = stream_get_meta_data($resource);
-        $mode = is_string($metadata['mode'] ?? null) ? $metadata['mode'] : '';
-        $firstMode = '' === $mode ? '' : $mode[0];
-
-        $this->resource = $resource;
-        $this->seekable = true === ($metadata['seekable'] ?? false);
-        $this->readable = 'r' === $firstMode || str_contains($mode, '+');
-        $this->writable = in_array($firstMode, [
-                'w',
-                'a',
-                'x',
-                'c',
-            ], true) || str_contains($mode, '+');
-    }
-
     public function write(string $string): int
     {
-        if (!$this->isWritable()) {
+        if (!is_resource($this->resource) || !$this->writable) {
             throw new RuntimeException('The HTTP message stream is not writable.');
         }
 
@@ -87,7 +56,7 @@ trait ResourceStreamBehavior
         $written = 0;
 
         while ('' !== $remaining) {
-            $count = @fwrite($this->requireResource(), $remaining);
+            $count = @fwrite(ResourceGuard::requireAttached($this->resource), $remaining);
 
             if (false === $count || 0 === $count) {
                 throw new RuntimeException('Unable to write to the HTTP message stream.');
@@ -107,46 +76,14 @@ trait ResourceStreamBehavior
         return is_resource($this->resource) && $this->writable;
     }
 
-    /**
-     * @return resource
-     */
-    private function requireResource(): mixed
-    {
-        if (!is_resource($this->resource)) {
-            throw new RuntimeException('The HTTP message stream is detached or closed.');
-        }
-
-        return $this->resource;
-    }
-
     public function rewind(): void
     {
-        $this->seek(0);
+        ResourceCursor::seek($this->resource, $this->seekable, 0, SEEK_SET);
     }
 
     public function seek(int $offset, int $whence = SEEK_SET): void
     {
-        if (!in_array($whence, [
-            SEEK_SET,
-            SEEK_CUR,
-            SEEK_END,
-        ], true)) {
-            throw new RuntimeException(sprintf(
-                'Invalid HTTP message stream seek mode %d.',
-                $whence,
-            ));
-        }
-
-        if (!$this->isSeekable()) {
-            throw new RuntimeException('The HTTP message stream is not seekable.');
-        }
-
-        if (0 !== @fseek($this->requireResource(), $offset, $whence)) {
-            throw new RuntimeException(sprintf(
-                'Unable to seek the HTTP message stream to offset %d.',
-                $offset,
-            ));
-        }
+        ResourceCursor::seek($this->resource, $this->seekable, $offset, $whence);
     }
 
     public function isSeekable(): bool
@@ -161,11 +98,11 @@ trait ResourceStreamBehavior
         }
 
         try {
-            if ($this->isSeekable()) {
-                $this->rewind();
+            if ($this->seekable) {
+                ResourceCursor::seek($this->resource, $this->seekable, 0, SEEK_SET);
             }
 
-            return $this->getContents();
+            return ResourceContents::remaining($this->resource, $this->readable);
         } catch (Throwable) {
             return '';
         }
@@ -173,17 +110,7 @@ trait ResourceStreamBehavior
 
     public function getContents(): string
     {
-        if (!$this->isReadable()) {
-            throw new RuntimeException('The HTTP message stream is not readable.');
-        }
-
-        $contents = @stream_get_contents($this->requireResource());
-
-        if (false === $contents) {
-            throw new RuntimeException('Unable to read the remaining HTTP message stream contents.');
-        }
-
-        return $contents;
+        return ResourceContents::remaining($this->resource, $this->readable);
     }
 
     public function isReadable(): bool
@@ -212,7 +139,7 @@ trait ResourceStreamBehavior
 
     public function tell(): int
     {
-        $resource = $this->requireResource();
+        $resource = ResourceGuard::requireAttached($this->resource);
         $position = @ftell($resource);
 
         if (false === $position) {
@@ -233,7 +160,7 @@ trait ResourceStreamBehavior
             throw new RuntimeException('HTTP message stream read length cannot be negative.');
         }
 
-        if (!$this->isReadable()) {
+        if (!is_resource($this->resource) || !$this->readable) {
             throw new RuntimeException('The HTTP message stream is not readable.');
         }
 
@@ -241,7 +168,7 @@ trait ResourceStreamBehavior
             return '';
         }
 
-        $contents = @fread($this->requireResource(), $length);
+        $contents = @fread(ResourceGuard::requireAttached($this->resource), $length);
 
         if (false === $contents) {
             throw new RuntimeException('Unable to read from the HTTP message stream.');
@@ -263,12 +190,20 @@ trait ResourceStreamBehavior
 
     public function __destruct()
     {
-        $this->close();
+        $resource = $this->resource;
+        $this->resource = null;
+        $this->size = null;
+
+        if (is_resource($resource)) {
+            fclose($resource);
+        }
     }
 
     public function close(): void
     {
-        $resource = $this->detach();
+        $resource = $this->resource;
+        $this->resource = null;
+        $this->size = null;
 
         if (is_resource($resource)) {
             fclose($resource);

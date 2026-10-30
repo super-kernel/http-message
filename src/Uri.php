@@ -6,32 +6,20 @@ namespace SuperKernel\HttpMessage;
 
 use InvalidArgumentException;
 use Psr\Http\Message\UriInterface;
+use SuperKernel\HttpMessage\UriComponent\StandardPort;
+use SuperKernel\HttpMessage\UriComponent\UriAuthority;
+use SuperKernel\HttpMessage\UriComponent\UriComponents;
 
 use function array_key_exists;
-use function filter_var;
 use function is_string;
 use function ltrim;
 use function parse_url;
-use function preg_match;
-use function preg_replace_callback;
-use function rawurlencode;
 use function sprintf;
-use function str_ends_with;
 use function str_starts_with;
-use function strtolower;
 use function substr;
-
-use const FILTER_FLAG_IPV6;
-use const FILTER_VALIDATE_IP;
 
 final class Uri implements UriInterface
 {
-    /** @var array<string, int> */
-    private const array DEFAULT_PORTS = [
-        'http'  => 80,
-        'https' => 443,
-    ];
-
     private string $scheme = '';
 
     private string $userInfo = '';
@@ -61,12 +49,12 @@ final class Uri implements UriInterface
             throw new InvalidArgumentException(sprintf('Unable to parse URI %s.', $uri));
         }
 
-        $this->scheme = self::normalizeScheme($parts['scheme'] ?? '');
-        $this->host = self::normalizeHost($parts['host'] ?? '');
-        $this->port = self::normalizePort($parts['port'] ?? null);
-        $this->path = self::encodePath($parts['path'] ?? '');
-        $this->query = self::encodeQueryOrFragment($parts['query'] ?? '');
-        $this->fragment = self::encodeQueryOrFragment($parts['fragment'] ?? '');
+        $this->scheme = UriComponents::normalizeScheme($parts['scheme'] ?? '');
+        $this->host = UriComponents::normalizeHost($parts['host'] ?? '');
+        $this->port = UriComponents::normalizePort($parts['port'] ?? null);
+        $this->path = UriComponents::encodePath($parts['path'] ?? '');
+        $this->query = UriComponents::encodeQueryOrFragment($parts['query'] ?? '');
+        $this->fragment = UriComponents::encodeQueryOrFragment($parts['fragment'] ?? '');
 
         if (array_key_exists('user', $parts)) {
             $user = $parts['user'];
@@ -81,107 +69,8 @@ final class Uri implements UriInterface
                 throw new InvalidArgumentException(sprintf('Unable to parse URI password from %s.', $uri));
             }
 
-            $this->userInfo = self::normalizeUserInfo($user, $password);
+            $this->userInfo = UriComponents::normalizeUserInfo($user, $password);
         }
-    }
-
-    private static function normalizeScheme(string $scheme): string
-    {
-        if ('' === $scheme) {
-            return '';
-        }
-
-        if (1 !== preg_match('/^[A-Za-z][A-Za-z0-9+.-]*$/D', $scheme)) {
-            throw new InvalidArgumentException(sprintf('Invalid URI scheme %s.', $scheme));
-        }
-
-        return strtolower($scheme);
-    }
-
-    private static function normalizeHost(string $host): string
-    {
-        if ('' === $host) {
-            return '';
-        }
-
-        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
-            $address = substr($host, 1, -1);
-
-            if (false === filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                throw new InvalidArgumentException(sprintf('Invalid URI host %s.', $host));
-            }
-
-            return '[' . strtolower($address) . ']';
-        }
-
-        if (false !== filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            return '[' . strtolower($host) . ']';
-        }
-
-        if (1 !== preg_match("/^(?:[A-Za-z0-9._~!$&'()*+,;=-]|%[A-Fa-f0-9]{2})+$/D", $host)) {
-            throw new InvalidArgumentException(sprintf('Invalid URI host %s.', $host));
-        }
-
-        return strtolower($host);
-    }
-
-    private static function normalizePort(?int $port): ?int
-    {
-        if (null !== $port && (0 > $port || 65_535 < $port)) {
-            throw new InvalidArgumentException(sprintf('Invalid URI port %d.', $port));
-        }
-
-        return $port;
-    }
-
-    private static function encodePath(string $path): string
-    {
-        return self::encode(
-            $path,
-            "/[^a-zA-Z0-9_\-.~!$&'()*+,;=:@\/%]+|%(?![A-Fa-f0-9]{2})/",
-        );
-    }
-
-    private static function encode(string $value, string $pattern): string
-    {
-        $encoded = preg_replace_callback(
-            $pattern,
-            static fn(array $matches): string => rawurlencode($matches[0]),
-            $value,
-        );
-
-        if (null === $encoded) {
-            throw new InvalidArgumentException('Unable to percent-encode a URI component.');
-        }
-
-        return $encoded;
-    }
-
-    private static function encodeQueryOrFragment(string $value): string
-    {
-        return self::encode(
-            $value,
-            "/[^a-zA-Z0-9_\-.~!$&'()*+,;=:@\/?%]+|%(?![A-Fa-f0-9]{2})/",
-        );
-    }
-
-    private static function normalizeUserInfo(string $user, ?string $password): string
-    {
-        if ('' === $user) {
-            return '';
-        }
-
-        $userInfo = self::encodeUserInfo($user);
-
-        return null === $password ? $userInfo : $userInfo . ':' . self::encodeUserInfo($password);
-    }
-
-    private static function encodeUserInfo(string $value): string
-    {
-        return self::encode(
-            $value,
-            "/[^a-zA-Z0-9_\-.~!$&'()*+,;=:%]+|%(?![A-Fa-f0-9]{2})/",
-        );
     }
 
     public function getScheme(): string
@@ -217,7 +106,7 @@ final class Uri implements UriInterface
     public function withScheme(string $scheme): UriInterface
     {
         $clone = clone $this;
-        $clone->scheme = self::normalizeScheme($scheme);
+        $clone->scheme = UriComponents::normalizeScheme($scheme);
 
         return $clone;
     }
@@ -225,7 +114,7 @@ final class Uri implements UriInterface
     public function withUserInfo(string $user, ?string $password = null): UriInterface
     {
         $clone = clone $this;
-        $clone->userInfo = self::normalizeUserInfo($user, $password);
+        $clone->userInfo = UriComponents::normalizeUserInfo($user, $password);
 
         return $clone;
     }
@@ -233,7 +122,7 @@ final class Uri implements UriInterface
     public function withHost(string $host): UriInterface
     {
         $clone = clone $this;
-        $clone->host = self::normalizeHost($host);
+        $clone->host = UriComponents::normalizeHost($host);
 
         return $clone;
     }
@@ -241,7 +130,7 @@ final class Uri implements UriInterface
     public function withPort(?int $port): UriInterface
     {
         $clone = clone $this;
-        $clone->port = self::normalizePort($port);
+        $clone->port = UriComponents::normalizePort($port);
 
         return $clone;
     }
@@ -249,7 +138,7 @@ final class Uri implements UriInterface
     public function withPath(string $path): UriInterface
     {
         $clone = clone $this;
-        $clone->path = self::encodePath($path);
+        $clone->path = UriComponents::encodePath($path);
 
         return $clone;
     }
@@ -261,7 +150,7 @@ final class Uri implements UriInterface
         }
 
         $clone = clone $this;
-        $clone->query = self::encodeQueryOrFragment($query);
+        $clone->query = UriComponents::encodeQueryOrFragment($query);
 
         return $clone;
     }
@@ -273,7 +162,7 @@ final class Uri implements UriInterface
         }
 
         $clone = clone $this;
-        $clone->fragment = self::encodeQueryOrFragment($fragment);
+        $clone->fragment = UriComponents::encodeQueryOrFragment($fragment);
 
         return $clone;
     }
@@ -281,7 +170,7 @@ final class Uri implements UriInterface
     public function __toString(): string
     {
         $uri = '' === $this->scheme ? '' : $this->scheme . ':';
-        $authority = $this->getAuthority();
+        $authority = UriAuthority::compose($this->scheme, $this->userInfo, $this->host, $this->port);
         $path = $this->path;
 
         if ('' !== $authority) {
@@ -309,23 +198,11 @@ final class Uri implements UriInterface
 
     public function getAuthority(): string
     {
-        if ('' === $this->host) {
-            return '';
-        }
-
-        $authority = '' === $this->userInfo ? '' : $this->userInfo . '@';
-        $authority .= $this->host;
-        $port = $this->getPort();
-
-        return null === $port ? $authority : $authority . ':' . $port;
+        return UriAuthority::compose($this->scheme, $this->userInfo, $this->host, $this->port);
     }
 
     public function getPort(): ?int
     {
-        if (null === $this->port) {
-            return null;
-        }
-
-        return (self::DEFAULT_PORTS[$this->scheme] ?? null) === $this->port ? null : $this->port;
+        return StandardPort::suppress($this->scheme, $this->port);
     }
 }
