@@ -17,18 +17,18 @@ The package provides:
 
 Paths below are relative to `src/` and the package namespace.
 
-| Directory | Responsibility |
-| --- | --- |
-| `Stream` | PSR stream implementations and their shared `ResourceStreamBehavior` trait. |
-| `Context / Provider` | Typed request-local access and stateless PSR delegates. |
+| Directory            | Responsibility                                                                                |
+|----------------------|-----------------------------------------------------------------------------------------------|
+| `Header`             | `@internal` header validation, case-insensitive lookup and replacement, and Host derivation.  |
+| `StartLine`          | `@internal` protocol version, request method, and response status validation.                 |
+| `UriComponent`       | `@internal` URI component normalization, percent-encoding, authority, and standard ports.     |
+| `Upload`             | `@internal` uploaded-file tree validation, availability, size, copying, and moving.           |
+| `Stream`             | PSR stream implementations, the shared `ResourceStreamBehavior` trait, and a read-only guard. |
+| `Stream/Resource`    | `@internal` capability, cursor, contents, and attachment checks of resource-backed streams.   |
+| `Stream/Source`      | `@internal` chunk sources and drains of iterable and callback streams.                        |
+| `Context / Provider` | Typed request-local access, its `@internal` call forwarders, and stateless PSR delegates.     |
 
 Implementation helpers retain an `@internal` boundary; a responsibility namespace does not make them extension points.
-
-### Public namespaces
-
-Use the following component declarations:
-
-- `Stream\ResourceStreamBehavior`
 
 ## Basic usage
 
@@ -101,10 +101,10 @@ After `moveTo()` succeeds, `getStream()` and a second move fail as required by P
 
 `RequestContext` and `ResponseContext` store the current messages under the PSR interface keys in
 `SuperKernel\Context\Context`. `Provider\RequestProvider` and `Provider\ResponseProvider` delegate each declared PSR
-call to those current messages through private methods, so a retained provider does not capture invocation-specific
-state. The providers implement and are registered directly for `Psr\Http\Message\ServerRequestInterface` and
-`Psr\Http\Message\ResponseInterface`; they do not expose magic forwarding, context accessors, or native transport
-objects.
+call to those current messages through `@internal` static forwarders, so a retained provider does not capture
+invocation-specific state. The providers implement and are registered directly for
+`Psr\Http\Message\ServerRequestInterface` and `Psr\Http\Message\ResponseInterface`; they do not expose magic forwarding,
+context accessors, or native transport objects.
 
 ## URI behavior
 

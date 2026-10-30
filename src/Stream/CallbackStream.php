@@ -4,49 +4,42 @@ declare(strict_types=1);
 
 namespace SuperKernel\HttpMessage\Stream;
 
-use Closure;
 use Psr\Http\Message\StreamInterface;
 use RuntimeException;
+use SuperKernel\HttpMessage\Stream\Source\CallbackStreamContents;
+use SuperKernel\HttpMessage\Stream\Source\CallbackStreamSource;
 use Throwable;
-
-use function get_debug_type;
-use function implode;
-use function is_string;
-use function sprintf;
-use function strlen;
-use function substr;
 
 use const SEEK_SET;
 
 final class CallbackStream implements StreamInterface
 {
-    private string $buffer = '';
-
-    private bool $closed = false;
-
-    /** @var (Closure(positive-int): (non-empty-string|null))|null */
-    private ?Closure $reader;
-
-    private bool $sourceEnded = false;
-
-    private int $position = 0;
+    private CallbackStreamSource $source;
 
     /**
      * @param callable(positive-int): (non-empty-string|null) $reader
      */
     public function __construct(callable $reader)
     {
-        $this->reader = $reader(...);
+        $this->source = new CallbackStreamSource($reader(...));
+    }
+
+    /**
+     * Keeps the position, buffered bytes, and closed state of a clone independent while both streams share the reader.
+     */
+    public function __clone(): void
+    {
+        $this->source = clone $this->source;
     }
 
     public function __toString(): string
     {
-        if ($this->closed) {
+        if ($this->source->isClosed()) {
             return '';
         }
 
         try {
-            return $this->getContents();
+            return CallbackStreamContents::remaining($this->source);
         } catch (Throwable) {
             return '';
         }
@@ -54,86 +47,20 @@ final class CallbackStream implements StreamInterface
 
     public function getContents(): string
     {
-        $this->assertOpen();
-        $chunks = [];
+        $this->source->assertOpen();
 
-        while (!$this->eof()) {
-            $chunks[] = $this->read(8_192);
-        }
-
-        return implode('', $chunks);
-    }
-
-    private function assertOpen(): void
-    {
-        if ($this->closed) {
-            throw new RuntimeException('The callback stream is detached or closed.');
-        }
+        return CallbackStreamContents::remaining($this->source);
     }
 
     public function eof(): bool
     {
-        if ($this->closed) {
+        if ($this->source->isClosed()) {
             return true;
         }
 
-        if ('' !== $this->buffer) {
-            return false;
-        }
+        $this->source->fill(8_192);
 
-        $this->fill(8_192);
-
-        return $this->sourceEnded && '' === $this->buffer;
-    }
-
-    /**
-     * Asks the reader for chunks only while nothing is buffered, so a read returns as soon as the source produced
-     * bytes; the reader receives the full requested length.
-     */
-    private function fill(int $length): void
-    {
-        while (!$this->sourceEnded && '' === $this->buffer) {
-            try {
-                $chunk = ($this->requireReader())($length);
-            } catch (RuntimeException $exception) {
-                throw $exception;
-            } catch (Throwable $throwable) {
-                throw new RuntimeException('Unable to read from the callback stream source.', previous: $throwable);
-            }
-
-            if (null === $chunk) {
-                $this->sourceEnded = true;
-
-                continue;
-            }
-
-            if (!is_string($chunk)) {
-                throw new RuntimeException(sprintf(
-                    'Callback stream sources must return strings or null; got %s.',
-                    get_debug_type($chunk),
-                ));
-            }
-
-            if ('' === $chunk) {
-                throw new RuntimeException(
-                    'Callback stream sources must not return an empty chunk before end of source.',
-                );
-            }
-
-            $this->buffer .= $chunk;
-        }
-    }
-
-    /**
-     * @return Closure(positive-int): (non-empty-string|null)
-     */
-    private function requireReader(): Closure
-    {
-        if (null === $this->reader) {
-            throw new RuntimeException('The callback stream source is detached or closed.');
-        }
-
-        return $this->reader;
+        return $this->source->isExhausted();
     }
 
     public function read(int $length): string
@@ -142,38 +69,27 @@ final class CallbackStream implements StreamInterface
             throw new RuntimeException('Callback stream read length cannot be negative.');
         }
 
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         if (0 === $length) {
             return '';
         }
 
-        $this->fill($length);
-        $contents = substr($this->buffer, 0, $length);
-        $consumed = strlen($contents);
-        $this->buffer = substr($this->buffer, $consumed);
-        $this->position += $consumed;
+        $this->source->fill($length);
 
-        return $contents;
+        return $this->source->take($length);
     }
 
     public function detach(): null
     {
-        $this->close();
+        $this->source->close();
 
         return null;
     }
 
     public function close(): void
     {
-        if ($this->closed) {
-            return;
-        }
-
-        $this->closed = true;
-        $this->sourceEnded = true;
-        $this->buffer = '';
-        $this->reader = null;
+        $this->source->close();
     }
 
     public function getSize(): ?int
@@ -183,9 +99,9 @@ final class CallbackStream implements StreamInterface
 
     public function tell(): int
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
-        return $this->position;
+        return $this->source->position();
     }
 
     public function isSeekable(): bool
@@ -195,12 +111,14 @@ final class CallbackStream implements StreamInterface
 
     public function rewind(): void
     {
-        $this->seek(0);
+        $this->source->assertOpen();
+
+        throw new RuntimeException('The callback stream is not seekable.');
     }
 
     public function seek(int $offset, int $whence = SEEK_SET): void
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         throw new RuntimeException('The callback stream is not seekable.');
     }
@@ -212,14 +130,14 @@ final class CallbackStream implements StreamInterface
 
     public function write(string $string): int
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         throw new RuntimeException('The callback stream is not writable.');
     }
 
     public function isReadable(): bool
     {
-        return !$this->closed;
+        return !$this->source->isClosed();
     }
 
     public function getMetadata(?string $key = null): ?array
@@ -229,6 +147,6 @@ final class CallbackStream implements StreamInterface
 
     public function __destruct()
     {
-        $this->close();
+        $this->source->close();
     }
 }

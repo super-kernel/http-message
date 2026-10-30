@@ -9,31 +9,17 @@ use Iterator;
 use IteratorIterator;
 use Psr\Http\Message\StreamInterface;
 use RuntimeException;
+use SuperKernel\HttpMessage\Stream\Source\IterableStreamContents;
+use SuperKernel\HttpMessage\Stream\Source\IterableStreamSource;
 use Throwable;
 
-use function get_debug_type;
-use function implode;
 use function is_array;
-use function is_string;
-use function sprintf;
-use function strlen;
-use function substr;
 
 use const SEEK_SET;
 
 final class IterableStream implements StreamInterface
 {
-    private string $buffer = '';
-
-    private bool $closed = false;
-
-    private bool $started = false;
-
-    private ?Iterator $iterator;
-
-    private bool $sourceEnded = false;
-
-    private int $position = 0;
+    private IterableStreamSource $source;
 
     /**
      * @param iterable $chunks Each yielded value must be a string
@@ -41,22 +27,33 @@ final class IterableStream implements StreamInterface
     public function __construct(iterable $chunks)
     {
         if (is_array($chunks)) {
-            $this->iterator = new ArrayIterator($chunks);
+            $this->source = new IterableStreamSource(new ArrayIterator($chunks));
 
             return;
         }
 
-        $this->iterator = $chunks instanceof Iterator ? $chunks : new IteratorIterator($chunks);
+        $this->source = new IterableStreamSource(
+            $chunks instanceof Iterator ? $chunks : new IteratorIterator($chunks),
+        );
+    }
+
+    /**
+     * Keeps the position, buffered bytes, started state, and closed state of a clone independent while both streams
+     * share the iterator.
+     */
+    public function __clone(): void
+    {
+        $this->source = clone $this->source;
     }
 
     public function __toString(): string
     {
-        if ($this->closed) {
+        if ($this->source->isClosed()) {
             return '';
         }
 
         try {
-            return $this->getContents();
+            return IterableStreamContents::remaining($this->source);
         } catch (Throwable) {
             return '';
         }
@@ -64,110 +61,32 @@ final class IterableStream implements StreamInterface
 
     public function getContents(): string
     {
-        $this->assertOpen();
-        $chunks = [];
+        $this->source->assertOpen();
 
-        while (!$this->eof()) {
-            $chunks[] = $this->read(8_192);
-        }
-
-        return implode('', $chunks);
-    }
-
-    private function assertOpen(): void
-    {
-        if ($this->closed) {
-            throw new RuntimeException('The iterable stream is detached or closed.');
-        }
+        return IterableStreamContents::remaining($this->source);
     }
 
     public function eof(): bool
     {
-        if ($this->closed) {
+        if ($this->source->isClosed()) {
             return true;
         }
 
-        if ('' !== $this->buffer) {
-            return false;
-        }
+        $this->source->fill();
 
-        $this->fill();
-
-        return $this->sourceEnded && '' === $this->buffer;
-    }
-
-    /**
-     * Pulls source chunks only while nothing is buffered, so a read returns as soon as the source produced bytes.
-     */
-    private function fill(): void
-    {
-        while (!$this->sourceEnded && '' === $this->buffer) {
-            try {
-                $chunk = $this->nextChunk();
-            } catch (RuntimeException $exception) {
-                throw $exception;
-            } catch (Throwable $throwable) {
-                throw new RuntimeException('Unable to read from the iterable stream source.', previous: $throwable);
-            }
-
-            if (null === $chunk) {
-                $this->sourceEnded = true;
-
-                continue;
-            }
-
-            $this->buffer .= $chunk;
-        }
-    }
-
-    private function nextChunk(): ?string
-    {
-        $iterator = $this->requireIterator();
-
-        while (true) {
-            if ($this->started) {
-                $iterator->next();
-            } else {
-                $iterator->rewind();
-                $this->started = true;
-            }
-
-            if (!$iterator->valid()) {
-                return null;
-            }
-
-            $chunk = $iterator->current();
-
-            if (!is_string($chunk)) {
-                throw new RuntimeException(sprintf(
-                    'Iterable stream chunks must be strings; got %s.',
-                    get_debug_type($chunk),
-                ));
-            }
-
-            if ('' !== $chunk) {
-                return $chunk;
-            }
-        }
-    }
-
-    private function requireIterator(): Iterator
-    {
-        if (null === $this->iterator) {
-            throw new RuntimeException('The iterable stream source is detached or closed.');
-        }
-
-        return $this->iterator;
+        return $this->source->isExhausted();
     }
 
     public function rewind(): void
     {
-        $this->seek(0);
+        $this->source->assertOpen();
+
+        throw new RuntimeException('The iterable stream is not seekable.');
     }
 
     public function seek(int $offset, int $whence = SEEK_SET): void
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         throw new RuntimeException('The iterable stream is not seekable.');
     }
@@ -178,38 +97,27 @@ final class IterableStream implements StreamInterface
             throw new RuntimeException('Iterable stream read length cannot be negative.');
         }
 
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         if (0 === $length) {
             return '';
         }
 
-        $this->fill();
-        $contents = substr($this->buffer, 0, $length);
-        $consumed = strlen($contents);
-        $this->buffer = substr($this->buffer, $consumed);
-        $this->position += $consumed;
+        $this->source->fill();
 
-        return $contents;
+        return $this->source->take($length);
     }
 
     public function detach(): null
     {
-        $this->close();
+        $this->source->close();
 
         return null;
     }
 
     public function close(): void
     {
-        if ($this->closed) {
-            return;
-        }
-
-        $this->closed = true;
-        $this->sourceEnded = true;
-        $this->buffer = '';
-        $this->iterator = null;
+        $this->source->close();
     }
 
     public function getSize(): ?int
@@ -219,9 +127,9 @@ final class IterableStream implements StreamInterface
 
     public function tell(): int
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
-        return $this->position;
+        return $this->source->position();
     }
 
     public function isSeekable(): bool
@@ -236,14 +144,14 @@ final class IterableStream implements StreamInterface
 
     public function write(string $string): int
     {
-        $this->assertOpen();
+        $this->source->assertOpen();
 
         throw new RuntimeException('The iterable stream is not writable.');
     }
 
     public function isReadable(): bool
     {
-        return !$this->closed;
+        return !$this->source->isClosed();
     }
 
     public function getMetadata(?string $key = null): ?array
@@ -253,6 +161,6 @@ final class IterableStream implements StreamInterface
 
     public function __destruct()
     {
-        $this->close();
+        $this->source->close();
     }
 }

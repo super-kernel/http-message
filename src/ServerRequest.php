@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use Psr\Http\Message\UriInterface;
+use SuperKernel\HttpMessage\Upload\UploadedFileTree;
 
 use function array_key_exists;
 use function get_debug_type;
@@ -62,8 +63,13 @@ class ServerRequest extends Request implements ServerRequestInterface
     {
         parent::__construct($method, $uri, $headers, $body, $protocolVersion);
 
-        self::assertUploadedFiles($uploadedFiles);
-        self::assertAttributeNames($attributes);
+        UploadedFileTree::validate($uploadedFiles);
+
+        foreach ($attributes as $name => $_) {
+            if (!is_string($name)) {
+                throw new InvalidArgumentException('HTTP request attribute names must be strings.');
+            }
+        }
 
         $this->serverParams = $serverParams;
         $this->cookieParams = $cookieParams;
@@ -123,7 +129,7 @@ class ServerRequest extends Request implements ServerRequestInterface
 
     public function withUploadedFiles(array $uploadedFiles): static
     {
-        self::assertUploadedFiles($uploadedFiles);
+        UploadedFileTree::validate($uploadedFiles);
 
         $clone = clone $this;
         $clone->uploadedFiles = $uploadedFiles;
@@ -178,42 +184,5 @@ class ServerRequest extends Request implements ServerRequestInterface
         unset($clone->attributes[$name]);
 
         return $clone;
-    }
-
-    /**
-     * @param array<array-key, UploadedFileInterface|array> $uploadedFiles
-     */
-    private static function assertUploadedFiles(array $uploadedFiles, string $path = 'uploadedFiles'): void
-    {
-        foreach ($uploadedFiles as $name => $uploadedFile) {
-            $entryPath = $path . '[' . $name . ']';
-
-            if ($uploadedFile instanceof UploadedFileInterface) {
-                continue;
-            }
-
-            if (is_array($uploadedFile)) {
-                self::assertUploadedFiles($uploadedFile, $entryPath);
-
-                continue;
-            }
-
-            throw new InvalidArgumentException(sprintf(
-                '%s must contain only uploaded files or nested arrays.',
-                $entryPath,
-            ));
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $attributes
-     */
-    private static function assertAttributeNames(array $attributes): void
-    {
-        foreach ($attributes as $name => $_) {
-            if (!is_string($name)) {
-                throw new InvalidArgumentException('HTTP request attribute names must be strings.');
-            }
-        }
     }
 }

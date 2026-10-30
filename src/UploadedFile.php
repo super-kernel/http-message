@@ -9,22 +9,16 @@ use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use RuntimeException;
 use SuperKernel\HttpMessage\Stream\FileStream;
+use SuperKernel\HttpMessage\Upload\UploadedFileCopier;
+use SuperKernel\HttpMessage\Upload\UploadedFileGuard;
+use SuperKernel\HttpMessage\Upload\UploadedFileMover;
+use SuperKernel\HttpMessage\Upload\UploadedFileSize;
 use Throwable;
 
-use function fclose;
-use function filesize;
-use function fopen;
-use function fwrite;
 use function in_array;
-use function is_int;
 use function is_string;
-use function is_uploaded_file;
-use function move_uploaded_file;
-use function rename;
 use function sprintf;
 use function str_contains;
-use function substr;
-use function unlink;
 
 use const UPLOAD_ERR_CANT_WRITE;
 use const UPLOAD_ERR_EXTENSION;
@@ -84,7 +78,7 @@ final class UploadedFile implements UploadedFileInterface
 
     public function getStream(): StreamInterface
     {
-        $this->assertAvailable();
+        UploadedFileGuard::requireAvailable($this->moved, $this->error);
 
         if (null !== $this->stream) {
             return $this->stream;
@@ -103,14 +97,20 @@ final class UploadedFile implements UploadedFileInterface
             throw new InvalidArgumentException('The uploaded file target path is invalid.');
         }
 
-        $this->assertAvailable();
+        UploadedFileGuard::requireAvailable($this->moved, $this->error);
 
         try {
             if (null === $this->size) {
-                $this->size = $this->getSize();
+                $this->size = UploadedFileSize::detect($this->stream, $this->file);
             }
 
-            if (null !== $this->file && $this->moveFile($targetPath)) {
+            $sourcePath = $this->file;
+
+            if (null !== $sourcePath) {
+                $this->stream?->close();
+                $this->stream = null;
+                UploadedFileMover::move($sourcePath, $targetPath);
+
                 $this->moved = true;
                 $this->stream = null;
                 $this->file = null;
@@ -118,8 +118,15 @@ final class UploadedFile implements UploadedFileInterface
                 return;
             }
 
-            $source = $this->getStream();
-            $this->copyStream($source, $targetPath);
+            // The source stream may have moved this upload re-entrantly while reporting its size.
+            UploadedFileGuard::requireAvailable($this->moved, $this->error);
+            $source = $this->stream;
+
+            if (null === $source) {
+                throw new RuntimeException('No stream is available for the uploaded file.');
+            }
+
+            UploadedFileCopier::copy($source, $targetPath);
             $source->close();
 
             $this->moved = true;
@@ -141,17 +148,7 @@ final class UploadedFile implements UploadedFileInterface
             return $this->size;
         }
 
-        if (null !== $this->stream) {
-            return $this->size = $this->stream->getSize();
-        }
-
-        if (null === $this->file) {
-            return null;
-        }
-
-        $size = @filesize($this->file);
-
-        return $this->size = is_int($size) ? $size : null;
+        return $this->size = UploadedFileSize::detect($this->stream, $this->file);
     }
 
     public function getError(): int
@@ -167,126 +164,5 @@ final class UploadedFile implements UploadedFileInterface
     public function getClientMediaType(): ?string
     {
         return $this->clientMediaType;
-    }
-
-    private function assertAvailable(): void
-    {
-        if ($this->moved) {
-            throw new RuntimeException('The uploaded file has already been moved.');
-        }
-
-        if (UPLOAD_ERR_OK !== $this->error) {
-            throw new RuntimeException(sprintf(
-                'The uploaded file is unavailable because upload error %d occurred.',
-                $this->error,
-            ));
-        }
-    }
-
-    /**
-     * @throws Throwable When moving, copying, or removing the temporary source fails
-     */
-    private function moveFile(string $targetPath): bool
-    {
-        $sourcePath = $this->file;
-
-        if (null === $sourcePath) {
-            return false;
-        }
-
-        $this->stream?->close();
-        $this->stream = null;
-
-        $moved = is_uploaded_file($sourcePath)
-            ? @move_uploaded_file($sourcePath, $targetPath)
-            : @rename($sourcePath, $targetPath);
-
-        if ($moved) {
-            return true;
-        }
-
-        $source = new FileStream($sourcePath);
-
-        try {
-            $this->copyStream($source, $targetPath);
-        } catch (Throwable $throwable) {
-            $source->close();
-            @unlink($targetPath);
-
-            throw $throwable;
-        }
-
-        $source->close();
-
-        if (!@unlink($sourcePath)) {
-            @unlink($targetPath);
-
-            throw new RuntimeException(sprintf(
-                'Unable to remove uploaded file source %s after copying.',
-                $sourcePath,
-            ));
-        }
-
-        return true;
-    }
-
-    /**
-     * @throws Throwable When opening the target, reading the source, or writing a chunk fails
-     */
-    private function copyStream(StreamInterface $source, string $targetPath): void
-    {
-        $target = @fopen($targetPath, 'wb');
-
-        if (false === $target) {
-            throw new RuntimeException(sprintf('Unable to open uploaded file target %s.', $targetPath));
-        }
-
-        try {
-            if ($source->isSeekable()) {
-                $source->rewind();
-            }
-
-            while (!$source->eof()) {
-                $chunk = $source->read(8_192);
-
-                if ('' === $chunk) {
-                    if ($source->eof()) {
-                        break;
-                    }
-
-                    throw new RuntimeException('Unable to make progress while reading the uploaded file stream.');
-                }
-
-                self::writeChunk($target, $chunk, $targetPath);
-            }
-        } catch (Throwable $throwable) {
-            fclose($target);
-            @unlink($targetPath);
-
-            throw $throwable;
-        }
-
-        fclose($target);
-    }
-
-    /**
-     * @param resource $target
-     */
-    private static function writeChunk(mixed $target, string $chunk, string $targetPath): void
-    {
-        $remaining = $chunk;
-
-        while ('' !== $remaining) {
-            $written = @fwrite($target, $remaining);
-
-            if (false === $written || 0 === $written) {
-                throw new RuntimeException(sprintf(
-                    'Unable to write uploaded file target %s.',
-                    $targetPath,
-                ));
-            }
-
-            $remaining = substr($remaining, $written);
-        }
     }
 }

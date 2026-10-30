@@ -50,16 +50,7 @@ final class ReadOnlyStream implements StreamInterface
 
     public function tell(): int
     {
-        return $this->requireStream()->tell();
-    }
-
-    private function requireStream(): StreamInterface
-    {
-        if (null === $this->stream) {
-            throw new RuntimeException('The read-only stream is detached or closed.');
-        }
-
-        return $this->stream;
+        return ReadOnlyStreamGuard::requireAttached($this->stream)->tell();
     }
 
     public function eof(): bool
@@ -74,12 +65,12 @@ final class ReadOnlyStream implements StreamInterface
 
     public function seek(int $offset, int $whence = SEEK_SET): void
     {
-        $this->requireStream()->seek($offset, $whence);
+        ReadOnlyStreamGuard::requireAttached($this->stream)->seek($offset, $whence);
     }
 
     public function rewind(): void
     {
-        $this->requireStream()->rewind();
+        ReadOnlyStreamGuard::requireAttached($this->stream)->rewind();
     }
 
     public function isWritable(): bool
@@ -89,7 +80,7 @@ final class ReadOnlyStream implements StreamInterface
 
     public function write(string $string): int
     {
-        $this->requireStream();
+        ReadOnlyStreamGuard::requireAttached($this->stream);
 
         throw new RuntimeException('The read-only stream is not writable.');
     }
@@ -101,12 +92,12 @@ final class ReadOnlyStream implements StreamInterface
 
     public function read(int $length): string
     {
-        return $this->requireStream()->read($length);
+        return ReadOnlyStreamGuard::requireAttached($this->stream)->read($length);
     }
 
     public function getContents(): string
     {
-        return $this->requireStream()->getContents();
+        return ReadOnlyStreamGuard::requireAttached($this->stream)->getContents();
     }
 
     public function getMetadata(?string $key = null): mixed
@@ -120,7 +111,9 @@ final class ReadOnlyStream implements StreamInterface
 
     public function __destruct()
     {
-        $this->close();
+        $stream = $this->stream;
+        $this->stream = null;
+        $stream?->close();
     }
 
     public function close(): void
