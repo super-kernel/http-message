@@ -4,82 +4,114 @@
 
 # SuperKernel HTTP Message
 
-`super-kernel/http-message` 为 SuperKernel 提供 PSR-7 消息对象和请求作用域内的消息访问。其消息对象实现 `psr/http-message` 2.0，不依赖原生服务器。
+`super-kernel/http-message` 提供 SuperKernel 的 PSR-7 消息、URI、流和上传文件，并让服务能够访问当前作用域中的请求和响应。
 
-本包提供：
+## 安装
 
-- `Message`，共享的不可变消息基类；
-- `Request` 和 `ServerRequest`；
-- `Response`；
-- `Uri`；
-- 字符串、原生资源、文件、可迭代、回调和只读的流实现；
-- `UploadedFile`；
-- `Context\RequestContext` 和 `Context\ResponseContext`，当前消息可以作为 PSR-7 接口注入。
+```bash
+composer require super-kernel/http-message
+```
 
-## 基本用法
+本包除 PHP 外没有其他要求，并提供 `psr/http-message-implementation` 2.0。它的消息对象无需服务器、也无需构建即可使用；注入当前请求或响应需要 `super-kernel/di`，并且需要有代码保存这些消息，`super-kernel/http-server` 会为它处理的每个请求这样做。
+
+## 提供的能力
+
+- `Request`、`ServerRequest`、`Response` 和 `Uri`：带有公开构造函数的不可变 PSR-7 对象。
+- 基于字符串、原生资源、文件、分块可迭代对象、读取回调的流，以及另一个流的只读视图。
+- `UploadedFile`：基于流、临时文件路径或失败的上传。
+- `RequestContext` 和 `ResponseContext`：保存当前协程或进程的消息。
+- 作为容器服务的 `ServerRequestInterface` 和 `ResponseInterface`，它们始终作用于当前消息。
+
+它不提供：
+
+- `psr/http-factory` 工厂；
+- 路由、中间件或控制器调用；
+- 从原生服务器请求的转换或响应的发送；
+- 协议错误的恢复；
+- 把数组或对象序列化为消息体。
+
+## 快速开始
+
+创建一个请求和一个响应。将脚本保存为 `bin/messages.php`：
 
 ```php
+<?php
+
+declare(strict_types=1);
+
 use SuperKernel\HttpMessage\Request;
 use SuperKernel\HttpMessage\Response;
 use SuperKernel\HttpMessage\Stream\StringStream;
 
-$request = new Request('GET', 'https://example.test/widgets?limit=10');
-$request = $request->withHeader('Accept', 'application/json');
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+$request = new Request('GET', 'https://Example.test:443/widgets?limit=10');
+$json = $request->withHeader('Accept', 'application/json');
+
+echo $request->getHeaderLine('Host'), ' ', $request->getRequestTarget(), PHP_EOL;
+echo $request->hasHeader('Accept') ? 'changed' : 'unchanged', PHP_EOL;
+echo $json->getHeaderLine('accept'), PHP_EOL;
 
 $response = new Response(
-    statusCode: 200,
+    statusCode: 404,
     headers: [
         'Content-Type' => 'application/json',
     ],
-    body: new StringStream('{"items":[]}'),
+    body: new StringStream('{"error":"not found"}'),
 );
+
+echo $response->getStatusCode(), ' ', $response->getReasonPhrase(), ' ', $response->getBody(), PHP_EOL;
 ```
 
-消息、请求、响应和 URI 使用 PSR-7 的写时复制方法。修改后的值以新对象返回，原对象保持不变。消息体有意保留 PSR-7 流的身份，因此其读写位置可能会变化。
+运行脚本：
 
-## 流与上传
-
-针对每种来源场景，通过对应流类的公开构造函数创建：
-
-```php
-use SuperKernel\HttpMessage\Stream\FileStream;
-use SuperKernel\HttpMessage\Stream\ResourceStream;
-use SuperKernel\HttpMessage\Stream\StringStream;
-
-$memory = new StringStream('payload');
-$resource = new ResourceStream($nativeResource);
-$file = new FileStream('/srv/application/data.json');
+```bash
+php bin/messages.php
 ```
 
-每个流持有其附着的原生资源。`close()` 关闭资源，`detach()` 把资源转交给调用方。已分离或已关闭的流会拒绝需要资源的操作。
+它会打印：
 
-当来源无法自然地用一个原生资源表示时，使用按行为划分的实现：
-
-```php
-use SuperKernel\HttpMessage\Stream\CallbackStream;
-use SuperKernel\HttpMessage\Stream\IterableStream;
-use SuperKernel\HttpMessage\Stream\ReadOnlyStream;
-
-$chunks = new IterableStream([
-    'first',
-    'second',
-]);
-$callback = new CallbackStream($reader);
-$readOnly = new ReadOnlyStream($memory);
+```text
+example.test /widgets?limit=10
+unchanged
+application/json
+404 Not Found {"error":"not found"}
 ```
 
-可迭代流和回调流是可读、只能向前的，大小未知。可迭代的值必须是字符串；回调读取器接收请求的字节数，返回非空字符串，到达来源末尾时返回 `null`。只要来源产生了任何字节，`read()` 就会立即返回，从不等待凑满请求的长度，因此像事件流这样的慢速生产者会一块一块地到达使用方；比请求更大的块会留在缓冲区中供后续读取。它们的 `detach()` 方法释放生产者并返回 `null`。`ReadOnlyStream` 把读取、定位、元数据、关闭和分离委托给另一个 PSR 流，同时拒绝写入。所有流内容都是字节；数组或对象的序列化不属于流层。
+## 公开接口
 
-`UploadedFile` 接受一个 `StreamInterface`、一个本地临时路径，或者在上传失败时不接受任何来源。`moveTo()` 成功后，按照 PSR-7 的要求，`getStream()` 和第二次移动都会失败。
+| 名称 | 类别 | 用途 |
+| --- | --- | --- |
+| `SuperKernel\HttpMessage\Request` | 类 | 发出的请求；未提供 `Host` 头时从 URI 推导。 |
+| `SuperKernel\HttpMessage\ServerRequest` | 类 | 接收到的请求，带有服务器、Cookie、查询、上传、解析后的消息体和属性数据。 |
+| `SuperKernel\HttpMessage\Response` | 类 | 响应；未提供原因短语时使用标准原因短语。 |
+| `SuperKernel\HttpMessage\Uri` | 类 | 从字符串解析的 URI。 |
+| `SuperKernel\HttpMessage\Message` | 类 | 请求和响应的抽象基类。 |
+| `SuperKernel\HttpMessage\Stream\StringStream` | 类 | 基于临时流中字符串的流。 |
+| `SuperKernel\HttpMessage\Stream\ResourceStream` | 类 | 基于已打开的原生流资源的流。 |
+| `SuperKernel\HttpMessage\Stream\FileStream` | 类 | 基于文件的流，默认只读（`rb`）。 |
+| `SuperKernel\HttpMessage\Stream\IterableStream` | 类 | 基于字符串分块可迭代对象的只进流。 |
+| `SuperKernel\HttpMessage\Stream\CallbackStream` | 类 | 基于读取回调的只进流。 |
+| `SuperKernel\HttpMessage\Stream\ReadOnlyStream` | 类 | 拒绝写入的另一个流的视图。 |
+| `SuperKernel\HttpMessage\UploadedFile` | 类 | 来自流、临时路径或失败上传的上传文件。 |
+| `SuperKernel\HttpMessage\Context\RequestContext` | 类 | 保存、读取和清除当前服务器请求。 |
+| `SuperKernel\HttpMessage\Context\ResponseContext` | 类 | 保存、读取和清除当前响应。 |
+| `Psr\Http\Message\ServerRequestInterface` | 接口 | 注入为一个服务，其调用作用于当前服务器请求。 |
+| `Psr\Http\Message\ResponseInterface` | 接口 | 注入为一个服务，其调用作用于当前响应。 |
 
-## 作用域访问
+## 需要了解的行为
 
-`RequestContext` 和 `ResponseContext` 以 PSR 接口为键，把当前消息存放在 `SuperKernel\Context\Context` 中。注入 `Psr\Http\Message\ServerRequestInterface` 或 `Psr\Http\Message\ResponseInterface` 即可读取它们：对注入服务的每次调用都会转到当前作用域的消息，所以保留它的共享服务永远不会看到其他请求的状态。注入的服务只暴露 PSR-7 方法，没有魔术转发、上下文访问器或原生传输对象。
+- `with*()` 方法返回修改后的副本，原对象保持不变。副本共享消息体流，因此通过其中一个读取消息体会移动另一个所见的游标。
+- 无效输入会抛出 `InvalidArgumentException`，例如 `Invalid HTTP status code 600.` 或 `Invalid HTTP header name Bad Name.`；流或上传操作失败会抛出 `RuntimeException`。
+- 流拥有它持有的原生资源：`close()` 关闭资源，`detach()` 把资源交给调用方。此后，流对每个需要资源的操作都会抛出 `RuntimeException`；把它转换为字符串返回 `''`，且从不抛出异常。
+- 可迭代流和回调流的 `read()` 在数据源产生字节后立即返回，因此返回的字节可能少于请求的数量。
+- 成功调用 `moveTo()` 之后，`getStream()` 和再次调用 `moveTo()` 会抛出 `The uploaded file has already been moved.`
+- 没有保存请求时调用注入的 `ServerRequestInterface` 会抛出 `The current HTTP request context has not been initialized.`，注入的 `ResponseInterface` 会抛出 `The current HTTP response context has not been initialized.` 这些服务从构建元数据中发现：安装本包后请运行 `skernel build`，或者用会先构建的 `skernel run` 启动。
 
-## URI 行为
+## 文档
 
-`Uri` 把 scheme 和主机名规范为小写，从渲染出的 authority 中去掉 HTTP 和 HTTPS 的标准端口，保留有效的百分号编码字节，并对无效的组件字节进行百分号编码，且不会重复编码。
+开发者文档介绍了每一种流、上传、URI 规范化、当前请求服务以及错误消息：[SuperKernel HTTP Message](https://github.com/super-kernel/.github/blob/main/docs/components/http-message.zh-CN.md)。
 
-## 范围
+## 许可证
 
-本包不提供 `psr/http-factory` 工厂、路由、中间件编排、控制器调用、原生请求适配、响应发送、回调注册或协议异常恢复。原生运行时集成由 `super-kernel/http-server` 提供。
+基于 MIT 许可证发布，详见 [LICENSE](LICENSE)。
