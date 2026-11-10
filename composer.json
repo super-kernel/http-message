@@ -6,8 +6,8 @@
     "require": {
         "php": ">=8.4.27 <8.5",
         "psr/http-message": "^2.0",
-        "super-kernel/attribute": "dev-main",
-        "super-kernel/context": "dev-main"
+        "super-kernel/attribute": "self.version",
+        "super-kernel/context": "self.version"
     },
     "provide": {
         "psr/http-message-implementation": "2.0"
